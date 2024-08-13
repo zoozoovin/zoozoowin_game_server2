@@ -9,8 +9,7 @@ const {
   update,
   push,
 } = require("firebase/database");
-const { format } = require("date-fns");
-const { utcToZonedTime } = require("date-fns-tz"); // For date formatting
+const { format } = require("date-fns"); // For date formatting
 
 const firebaseConfig = {
   apiKey: "AIzaSyA7j5Q8vXwsi7N5hmGuV4xJE6hsqwYtffU",
@@ -47,7 +46,9 @@ async function accumulateGame2Collection(amount) {
   const game2CollectionSnapshot = await get(game2CollectionRef1);
   let currentCollectionValue = 0;
 
+  // if (game2CollectionSnapshot.exists()) {
   currentCollectionValue = toInteger(game2CollectionSnapshot.val());
+  // }
   console.log(currentCollectionValue);
 
   const newCollectionValue = currentCollectionValue + toInteger(amount);
@@ -62,9 +63,11 @@ async function updateUserWalletAndTransaction(phoneNumber, wonAmount) {
   const userData = userSnapshot.val();
 
   if (userData) {
+    // Update wallet balance
     const newWalletBalance = (userData.walletBalance || 0) + wonAmount;
     await update(userRef, { walletBalance: newWalletBalance });
 
+    // Retrieve existing allTrans and wonCashAmount lists
     const allTransRef = ref(database, `username/${phoneNumber}/allTrans`);
     const wonCashAmountRef = ref(
       database,
@@ -78,30 +81,28 @@ async function updateUserWalletAndTransaction(phoneNumber, wonAmount) {
       ? wonCashAmountSnapshot.val()
       : [];
 
-    const now = new Date();
-    const gmtDate = utcToZonedTime(now, "Etc/UTC");
-
+    // Create new transaction
     const transaction = {
       amount: wonAmount,
-      date: format(gmtDate, "dd-MM-yyyy"),
-      time: format(gmtDate, "HH:mm:ss"),
+      date: format(new Date(), "dd-MM-yyyy"),
+      time: format(new Date(), "HH:mm:ss"),
       title: `Patti King - you won Rs ${wonAmount}`,
       type: "game2",
-      gmtTime: gmtDate.toUTCString(), // Add GMT time in UTC format
     };
 
     const transaction1 = {
       amount: wonAmount,
-      date: format(gmtDate, "dd-MM-yyyy"),
-      timeSlot: format(gmtDate, "HH:mm:ss"),
+      date: format(new Date(), "dd-MM-yyyy"),
+      timeSlot: format(new Date(), "HH:mm:ss"),
       title: `Patti King - you won Rs ${wonAmount}`,
       type: "game2",
-      gmtTime: gmtDate.toUTCString(), // Add GMT time in UTC format
     };
 
+    // Add transaction to lists
     allTrans.push(transaction);
     wonCashAmount.push(transaction1);
 
+    // Update allTrans and wonCashAmount in the database
     await update(userRef, {
       allTrans: allTrans,
       wonCashAmount: wonCashAmount,
@@ -118,16 +119,20 @@ server.post("/bet", async (req, res) => {
 
   const userRef = ref(database, `game2/${phoneNumber}`);
 
+  // Get the current user data
   const userSnapshot = await get(userRef);
   const userData = userSnapshot.val();
 
   if (!userData) {
+    // New player
     if (betAmount <= 50) {
       const wonCard = getRandomElement(cardIds);
+      // Player wins
       const wonAmount = betAmount + betAmount * 0.4;
       await set(userRef, { lossAmount: 0, isFirst: true });
-      await accumulateGame2Collection(0);
+      await accumulateGame2Collection(0); // No change for new player win
 
+      // Update wallet, add transaction, and update wonCashAmount
       await updateUserWalletAndTransaction(
         phoneNumber,
         parseInt(wonAmount, 10)
@@ -135,6 +140,7 @@ server.post("/bet", async (req, res) => {
 
       res.send({ status: "win", wonCard, wonAmount: parseInt(wonAmount, 10) });
     } else {
+      // Player loses
       await accumulateGame2Collection(betAmount * 0.2);
 
       await set(userRef, {
@@ -159,14 +165,18 @@ server.post("/bet", async (req, res) => {
       res.send({ status: "lose", wonCard });
     }
   } else {
+    // Existing player
     const { lossAmount, isFirst } = userData;
 
     if (!isFirst) {
+      // If isFirst is false, check bet amount
       if (betAmount <= 50) {
+        // Player wins
         const wonCard = getRandomElement(cardIds);
         const wonAmount = betAmount + betAmount * 0.4;
         await update(userRef, { isFirst: true });
 
+        // Update wallet, add transaction, and update wonCashAmount
         await updateUserWalletAndTransaction(
           phoneNumber,
           parseInt(wonAmount, 10)
@@ -178,6 +188,7 @@ server.post("/bet", async (req, res) => {
           wonAmount: parseInt(wonAmount, 10),
         });
       } else {
+        // Player loses
         const remainingCards = [
           "c1",
           "c2",
@@ -202,13 +213,20 @@ server.post("/bet", async (req, res) => {
         res.send({ status: "lose", wonCard });
       }
     } else {
-      if (betAmount + betAmount * 0.4 <= lossAmount) {
+      // isFirst is true
+      if (
+        betAmount + betAmount * 0.4 <=
+        lossAmount
+        // - lossAmount * 0.2
+      ) {
+        // Player wins
         const wonCard = getRandomElement(cardIds);
         const wonAmount = betAmount + betAmount * 0.4;
         await update(userRef, {
           lossAmount: lossAmount - wonAmount,
         });
 
+        // Update wallet, add transaction, and update wonCashAmount
         await updateUserWalletAndTransaction(
           phoneNumber,
           parseInt(wonAmount, 10)
@@ -220,6 +238,7 @@ server.post("/bet", async (req, res) => {
           wonAmount: parseInt(wonAmount, 10),
         });
       } else {
+        // Player loses
         const remainingCards = [
           "c1",
           "c2",
