@@ -9,8 +9,7 @@ const {
   update,
   push,
 } = require("firebase/database");
-const { format } = require("date-fns");
-const { utcToZonedTime } = require("date-fns-tz"); // For date formatting
+const { format } = require("date-fns"); // For date formatting
 
 const firebaseConfig = {
   apiKey: "AIzaSyA7j5Q8vXwsi7N5hmGuV4xJE6hsqwYtffU",
@@ -55,11 +54,17 @@ async function accumulateGame2Collection(amount) {
   await update(game2CollectionRef, { game2Collection: newCollectionValue });
 }
 
-// Function to update user wallet and append transaction to allTrans and wonCashAmount
-async function updateUserWalletAndTransaction(phoneNumber, wonAmount) {
+// Function to update user wallet, append transaction to allTrans, wonCashAmount, and store last 5 matches
+async function updateUserWalletAndTransaction(
+  phoneNumber,
+  wonAmount,
+  wonCard,
+  result
+) {
   const userRef = ref(database, `username/${phoneNumber}`);
   const userSnapshot = await get(userRef);
   const userData = userSnapshot.val();
+  const game2UserRef = ref(database, `game2/${phoneNumber}`);
 
   if (userData) {
     const newWalletBalance = (userData.walletBalance || 0) + wonAmount;
@@ -79,24 +84,23 @@ async function updateUserWalletAndTransaction(phoneNumber, wonAmount) {
       : [];
 
     const now = new Date();
-    const gmtDate = utcToZonedTime(now, "Etc/UTC");
 
     const transaction = {
       amount: wonAmount,
-      date: format(gmtDate, "dd-MM-yyyy"),
-      time: format(gmtDate, "HH:mm:ss"),
+      date: format(now, "dd-MM-yyyy"),
+      time: format(now, "HH:mm:ss"),
       title: `Patti King - you won Rs ${wonAmount}`,
       type: "game2",
-      gmtTime: gmtDate.toUTCString(), // Add GMT time in UTC format
+      gmtTime: now.toUTCString(), // Add GMT time in UTC format
     };
 
     const transaction1 = {
       amount: wonAmount,
-      date: format(gmtDate, "dd-MM-yyyy"),
-      timeSlot: format(gmtDate, "HH:mm:ss"),
+      date: format(now, "dd-MM-yyyy"),
+      timeSlot: format(now, "HH:mm:ss"),
       title: `Patti King - you won Rs ${wonAmount}`,
       type: "game2",
-      gmtTime: gmtDate.toUTCString(), // Add GMT time in UTC format
+      gmtTime: now.toUTCString(), // Add GMT time in UTC format
     };
 
     allTrans.push(transaction);
@@ -105,6 +109,36 @@ async function updateUserWalletAndTransaction(phoneNumber, wonAmount) {
     await update(userRef, {
       allTrans: allTrans,
       wonCashAmount: wonCashAmount,
+    });
+
+    // Store last 5 matches
+    const last5MatchesRef = ref(database, `game2/${phoneNumber}/Last5Matches`);
+    const last5MatchesSnapshot = await get(last5MatchesRef);
+    let last5Matches = last5MatchesSnapshot.exists()
+      ? last5MatchesSnapshot.val()
+      : [];
+
+    // Create a new match entry
+    const matchEntry = {
+      wonCard: wonCard,
+      wonAmount: wonAmount,
+      result: result,
+      date: format(now, "dd-MM-yyyy"),
+      time: format(now, "HH:mm:ss"),
+      gmtTime: now.toUTCString(),
+    };
+
+    // Add the match entry to the beginning of the Last5Matches list
+    last5Matches.unshift(matchEntry);
+
+    // Keep only the last 5 matches
+    if (last5Matches.length > 5) {
+      last5Matches = last5Matches.slice(0, 5);
+    }
+
+    // Update Last5Matches in the database
+    await update(game2UserRef, {
+      Last5Matches: last5Matches,
     });
   }
 }
@@ -130,7 +164,9 @@ server.post("/bet", async (req, res) => {
 
       await updateUserWalletAndTransaction(
         phoneNumber,
-        parseInt(wonAmount, 10)
+        parseInt(wonAmount, 10),
+        wonCard,
+        "win"
       );
 
       res.send({ status: "win", wonCard, wonAmount: parseInt(wonAmount, 10) });
@@ -157,6 +193,8 @@ server.post("/bet", async (req, res) => {
       ].filter((card) => !cardIds.includes(card));
       const wonCard = getRandomElement(remainingCards);
       res.send({ status: "lose", wonCard });
+
+      await updateUserWalletAndTransaction(phoneNumber, 0, wonCard, "lose");
     }
   } else {
     const { lossAmount, isFirst } = userData;
@@ -169,7 +207,9 @@ server.post("/bet", async (req, res) => {
 
         await updateUserWalletAndTransaction(
           phoneNumber,
-          parseInt(wonAmount, 10)
+          parseInt(wonAmount, 10),
+          wonCard,
+          "win"
         );
 
         res.send({
@@ -199,6 +239,9 @@ server.post("/bet", async (req, res) => {
           lossAmount: lossAmount + betAmount - betAmount * 0.2,
           isFirst: true,
         });
+
+        await updateUserWalletAndTransaction(phoneNumber, 0, wonCard, "lose");
+
         res.send({ status: "lose", wonCard });
       }
     } else {
@@ -211,7 +254,9 @@ server.post("/bet", async (req, res) => {
 
         await updateUserWalletAndTransaction(
           phoneNumber,
-          parseInt(wonAmount, 10)
+          parseInt(wonAmount, 10),
+          wonCard,
+          "win"
         );
 
         res.send({
@@ -240,17 +285,16 @@ server.post("/bet", async (req, res) => {
         await update(userRef, {
           lossAmount: lossAmount + betAmount - betAmount * 0.2,
         });
+
+        await updateUserWalletAndTransaction(phoneNumber, 0, wonCard, "lose");
+
         res.send({ status: "lose", wonCard });
       }
     }
   }
 });
 
-server.get("/", (req, res) => {
-  res.send("Firebase Express Server");
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+const port = process.env.PORT || 3000;
+server.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
 });

@@ -7,7 +7,6 @@ const {
   get,
   set,
   update,
-  push,
 } = require("firebase/database");
 const { format } = require("date-fns"); // For date formatting
 
@@ -46,9 +45,7 @@ async function accumulateGame2Collection(amount) {
   const game2CollectionSnapshot = await get(game2CollectionRef1);
   let currentCollectionValue = 0;
 
-  // if (game2CollectionSnapshot.exists()) {
   currentCollectionValue = toInteger(game2CollectionSnapshot.val());
-  // }
   console.log(currentCollectionValue);
 
   const newCollectionValue = currentCollectionValue + toInteger(amount);
@@ -56,16 +53,42 @@ async function accumulateGame2Collection(amount) {
   await update(game2CollectionRef, { game2Collection: newCollectionValue });
 }
 
-// Function to update user wallet and append transaction to allTrans and wonCashAmount
-async function updateUserWalletAndTransaction(phoneNumber, wonAmount) {
-  const userRef = ref(database, `username/${phoneNumber}`);
-  const userSnapshot = await get(userRef);
-  const userData = userSnapshot.val();
+// Function to update user wallet, append transaction, and update Last5Matches
+async function updateUserWalletAndTransaction(phoneNumber, wonAmount, status) {
+  const game2UserRef = ref(database, `game2/${phoneNumber}`);
+  const game2UserSnapshot = await get(game2UserRef);
+  const game2UserData = game2UserSnapshot.val();
 
-  if (userData) {
+  if (game2UserData) {
+    // Retrieve existing Last5Matches list
+    const last5MatchesRef = ref(database, `game2/${phoneNumber}/Last5Matches`);
+    const last5MatchesSnapshot = await get(last5MatchesRef);
+    let last5Matches = last5MatchesSnapshot.exists() ? last5MatchesSnapshot.val() : [];
+
+    // Create a new match entry
+    const matchEntry = {
+      status: status,
+      wonAmount: status === "win" ? wonAmount : 0,
+      date: format(new Date(), "dd-MM-yyyy"),
+      time: format(new Date(), "HH:mm:ss"),
+    };
+
+    // Add the match entry to the beginning of the Last5Matches list
+    last5Matches.unshift(matchEntry);
+
+    // Keep only the last 5 matches
+    if (last5Matches.length > 5) {
+      last5Matches = last5Matches.slice(0, 5);
+    }
+
+    // Update Last5Matches in the database
+    await update(game2UserRef, {
+      Last5Matches: last5Matches,
+    });
+
     // Update wallet balance
-    const newWalletBalance = (userData.walletBalance || 0) + wonAmount;
-    await update(userRef, { walletBalance: newWalletBalance });
+    const newWalletBalance = (game2UserData.walletBalance || 0) + wonAmount;
+    await update(game2UserRef, { walletBalance: newWalletBalance });
 
     // Retrieve existing allTrans and wonCashAmount lists
     const allTransRef = ref(database, `username/${phoneNumber}/allTrans`);
@@ -103,7 +126,7 @@ async function updateUserWalletAndTransaction(phoneNumber, wonAmount) {
     wonCashAmount.push(transaction1);
 
     // Update allTrans and wonCashAmount in the database
-    await update(userRef, {
+    await update(ref(database, `username/${phoneNumber}`), {
       allTrans: allTrans,
       wonCashAmount: wonCashAmount,
     });
@@ -124,44 +147,38 @@ server.post("/bet", async (req, res) => {
   const userData = userSnapshot.val();
 
   if (!userData) {
-    // New player
+    // New player wins
     if (betAmount <= 50) {
       const wonCard = getRandomElement(cardIds);
-      // Player wins
       const wonAmount = betAmount + betAmount * 0.4;
       await set(userRef, { lossAmount: 0, isFirst: true });
-      await accumulateGame2Collection(0); // No change for new player win
+      await accumulateGame2Collection(0);
 
-      // Update wallet, add transaction, and update wonCashAmount
+      // Update wallet, add transaction, and update Last5Matches
       await updateUserWalletAndTransaction(
         phoneNumber,
-        parseInt(wonAmount, 10)
+        parseInt(wonAmount, 10),
+        "win"
       );
 
       res.send({ status: "win", wonCard, wonAmount: parseInt(wonAmount, 10) });
     } else {
-      // Player loses
+      // New player loses
       await accumulateGame2Collection(betAmount * 0.2);
+      await set(userRef, { lossAmount: betAmount - betAmount * 0.2, isFirst: true });
 
-      await set(userRef, {
-        lossAmount: betAmount - betAmount * 0.2,
-        isFirst: true,
-      });
       const remainingCards = [
-        "c1",
-        "c2",
-        "c3",
-        "c4",
-        "c5",
-        "c6",
-        "c7",
-        "c8",
-        "c9",
-        "c10",
-        "c11",
-        "c12",
-      ].filter((card) => !cardIds.includes(card));
+        "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11", "c12"
+      ].filter(card => !cardIds.includes(card));
       const wonCard = getRandomElement(remainingCards);
+
+      // Update Last5Matches
+      await updateUserWalletAndTransaction(
+        phoneNumber,
+        0,
+        "lose"
+      );
+
       res.send({ status: "lose", wonCard });
     }
   } else {
@@ -176,10 +193,11 @@ server.post("/bet", async (req, res) => {
         const wonAmount = betAmount + betAmount * 0.4;
         await update(userRef, { isFirst: true });
 
-        // Update wallet, add transaction, and update wonCashAmount
+        // Update wallet, add transaction, and update Last5Matches
         await updateUserWalletAndTransaction(
           phoneNumber,
-          parseInt(wonAmount, 10)
+          parseInt(wonAmount, 10),
+          "win"
         );
 
         res.send({
@@ -190,19 +208,8 @@ server.post("/bet", async (req, res) => {
       } else {
         // Player loses
         const remainingCards = [
-          "c1",
-          "c2",
-          "c3",
-          "c4",
-          "c5",
-          "c6",
-          "c7",
-          "c8",
-          "c9",
-          "c10",
-          "c11",
-          "c12",
-        ].filter((card) => !cardIds.includes(card));
+          "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11", "c12"
+        ].filter(card => !cardIds.includes(card));
         const wonCard = getRandomElement(remainingCards);
         await accumulateGame2Collection(betAmount * 0.2);
 
@@ -210,15 +217,19 @@ server.post("/bet", async (req, res) => {
           lossAmount: lossAmount + betAmount - betAmount * 0.2,
           isFirst: true,
         });
+
+        // Update Last5Matches
+        await updateUserWalletAndTransaction(
+          phoneNumber,
+          0,
+          "lose"
+        );
+
         res.send({ status: "lose", wonCard });
       }
     } else {
       // isFirst is true
-      if (
-        betAmount + betAmount * 0.4 <=
-        lossAmount
-        // - lossAmount * 0.2
-      ) {
+      if (betAmount + betAmount * 0.4 <= lossAmount) {
         // Player wins
         const wonCard = getRandomElement(cardIds);
         const wonAmount = betAmount + betAmount * 0.4;
@@ -226,10 +237,11 @@ server.post("/bet", async (req, res) => {
           lossAmount: lossAmount - wonAmount,
         });
 
-        // Update wallet, add transaction, and update wonCashAmount
+        // Update wallet, add transaction, and update Last5Matches
         await updateUserWalletAndTransaction(
           phoneNumber,
-          parseInt(wonAmount, 10)
+          parseInt(wonAmount, 10),
+          "win"
         );
 
         res.send({
@@ -240,36 +252,30 @@ server.post("/bet", async (req, res) => {
       } else {
         // Player loses
         const remainingCards = [
-          "c1",
-          "c2",
-          "c3",
-          "c4",
-          "c5",
-          "c6",
-          "c7",
-          "c8",
-          "c9",
-          "c10",
-          "c11",
-          "c12",
-        ].filter((card) => !cardIds.includes(card));
+          "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11", "c12"
+        ].filter(card => !cardIds.includes(card));
         const wonCard = getRandomElement(remainingCards);
-        await accumulateGame2Collection(betAmount * 0.2);
 
         await update(userRef, {
-          lossAmount: lossAmount + betAmount - betAmount * 0.2,
+          lossAmount: 0,
+          isFirst: true,
         });
+
+        await accumulateGame2Collection(betAmount);
+
+        // Update Last5Matches
+        await updateUserWalletAndTransaction(
+          phoneNumber,
+          0,
+          "lose"
+        );
+
         res.send({ status: "lose", wonCard });
       }
     }
   }
 });
 
-server.get("/", (req, res) => {
-  res.send("Firebase Express Server");
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+server.listen(3000, () => {
+  console.log("Server is running on port 3000");
 });
