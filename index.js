@@ -1,14 +1,8 @@
 const express = require("express");
 const bodyParser = require("body-parser");
 const { initializeApp } = require("firebase/app");
-const {
-  getDatabase,
-  ref,
-  get,
-  set,
-  update,
-  push,
-} = require("firebase/database");
+const { getDatabase, ref, get, set, update } = require("firebase/database");
+
 const { format } = require("date-fns"); // For date formatting
 
 const firebaseConfig = {
@@ -38,22 +32,31 @@ function toInteger(value) {
   return isNaN(value) ? 0 : Math.floor(value);
 }
 
-// Function to accumulate value in game2Collection
 async function accumulateGame2Collection(amount) {
-  const game2CollectionRef = ref(database, "game2Collection");
-  const game2CollectionRef1 = ref(database, "game2Collection/game2Collection");
+  const today = format(new Date(), "dd_MM_yyyy");
+  const game2CollectionRef = ref(database, `game2Collection/${today}`);
 
-  const game2CollectionSnapshot = await get(game2CollectionRef1);
-  let currentCollectionValue = 0;
+  try {
+    // Check if today's entry exists
+    const snapshot = await get(game2CollectionRef);
 
-  currentCollectionValue = toInteger(game2CollectionSnapshot.val());
-  console.log(currentCollectionValue);
+    if (snapshot.exists()) {
+      // If it exists, get the current total collection value
+      const currentCollectionValue = snapshot.val().totalCollection || 0;
+      const newCollectionValue = currentCollectionValue + amount;
 
-  const newCollectionValue = currentCollectionValue + toInteger(amount);
+      // Update the existing entry with the new value
+      await update(game2CollectionRef, { totalCollection: newCollectionValue });
+    } else {
+      // If it doesn't exist, create a new entry with the initial value
+      await set(game2CollectionRef, { totalCollection: amount });
+    }
 
-  await update(game2CollectionRef, { game2Collection: newCollectionValue });
+    console.log(`Updated total collection for ${today}: ${amount}`);
+  } catch (error) {
+    console.error("Error updating collection:", error);
+  }
 }
-
 // Function to update user wallet, append transaction to allTrans, wonCashAmount, and store last 5 matches
 async function updateUserWalletAndTransaction(
   phoneNumber,
@@ -118,7 +121,6 @@ async function updateUserWalletAndTransaction(
       ? last5MatchesSnapshot.val()
       : [];
 
-    // Create a new match entry
     const matchEntry = {
       wonCard: wonCard,
       wonAmount: wonAmount,
@@ -128,15 +130,12 @@ async function updateUserWalletAndTransaction(
       gmtTime: now.toUTCString(),
     };
 
-    // Add the match entry to the beginning of the Last5Matches list
     last5Matches.unshift(matchEntry);
 
-    // Keep only the last 5 matches
     if (last5Matches.length > 5) {
       last5Matches = last5Matches.slice(0, 5);
     }
 
-    // Update Last5Matches in the database
     await update(game2UserRef, {
       Last5Matches: last5Matches,
     });
@@ -171,10 +170,10 @@ server.post("/bet", async (req, res) => {
 
       res.send({ status: "win", wonCard, wonAmount: parseInt(wonAmount, 10) });
     } else {
-      await accumulateGame2Collection(betAmount * 0.2);
+      await accumulateGame2Collection(betAmount * 0.1);
 
       await set(userRef, {
-        lossAmount: betAmount - betAmount * 0.2,
+        lossAmount: betAmount - betAmount * 0.1,
         isFirst: true,
       });
       const remainingCards = [
@@ -233,10 +232,10 @@ server.post("/bet", async (req, res) => {
           "c12",
         ].filter((card) => !cardIds.includes(card));
         const wonCard = getRandomElement(remainingCards);
-        await accumulateGame2Collection(betAmount * 0.2);
+        await accumulateGame2Collection(betAmount * 0.1);
 
         await update(userRef, {
-          lossAmount: lossAmount + betAmount - betAmount * 0.2,
+          lossAmount: lossAmount + betAmount - betAmount * 0.1,
           isFirst: true,
         });
 
@@ -245,11 +244,12 @@ server.post("/bet", async (req, res) => {
         res.send({ status: "lose", wonCard });
       }
     } else {
-      if (betAmount + betAmount * 0.4 <= lossAmount) {
+      if (betAmount * 0.5 <= lossAmount) {
         const wonCard = getRandomElement(cardIds);
         const wonAmount = betAmount + betAmount * 0.4;
+        await accumulateGame2Collection(betAmount * 0.1);
         await update(userRef, {
-          lossAmount: lossAmount - wonAmount,
+          lossAmount: lossAmount - (betAmount * 0.4) - (betAmount * 0.1),
         });
 
         await updateUserWalletAndTransaction(
@@ -280,10 +280,10 @@ server.post("/bet", async (req, res) => {
           "c12",
         ].filter((card) => !cardIds.includes(card));
         const wonCard = getRandomElement(remainingCards);
-        await accumulateGame2Collection(betAmount * 0.2);
+        await accumulateGame2Collection(betAmount * 0.1);
 
         await update(userRef, {
-          lossAmount: lossAmount + betAmount - betAmount * 0.2,
+          lossAmount: lossAmount + betAmount - betAmount * 0.1,
         });
 
         await updateUserWalletAndTransaction(phoneNumber, 0, wonCard, "lose");
@@ -298,3 +298,19 @@ const port = process.env.PORT || 3000;
 server.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
+
+// Function to accumulate value in game2Collection
+// async function accumulateGame2Collection(amount) {
+//   const game2CollectionRef = ref(database, "game2Collection");
+//   const game2CollectionRef1 = ref(database, "game2Collection/game2Collection");
+
+//   const game2CollectionSnapshot = await get(game2CollectionRef1);
+//   let currentCollectionValue = 0;
+
+//   currentCollectionValue = toInteger(game2CollectionSnapshot.val());
+//   console.log(currentCollectionValue);
+
+//   const newCollectionValue = currentCollectionValue + toInteger(amount);
+
+//   await update(game2CollectionRef, { game2Collection: newCollectionValue });
+// }
